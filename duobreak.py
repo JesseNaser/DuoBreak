@@ -90,8 +90,16 @@ class DuoAuthenticator:
             print("Duo databases found:")
             for i, file in enumerate(duo_files, 1):
                 print(f"{i}. {file}")
-            choice = int(input("Enter the number corresponding to the database you want to use: "))
-            self.config_file = duo_files[choice - 1]
+            while True:
+                try:
+                    choice = int(input("Enter the number corresponding to the database you want to use: "))
+                    if 1 <= choice <= len(duo_files):
+                        self.config_file = duo_files[choice - 1]
+                        break
+                    else:
+                        print("Invalid input. Please enter a valid number.")
+                except ValueError:
+                    print("Invalid input. Please enter a valid number.")
         else:
             print("No Duo databases found. Creating a new database.")
             db_name = input("Enter a name for the new database: ").strip()
