@@ -1,0 +1,6 @@
+cryptography
+pyotp
+Pillow
+pyzbar
+requests
+pycryptodome
