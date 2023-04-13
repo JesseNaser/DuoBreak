@@ -84,6 +84,15 @@ class DuoAuthenticator:
             return self.get_password(prompt)
         return password
 
+    def confirm_password(self, prompt):
+        password = self.get_password(prompt)
+        password_confirm = self.get_password("Confirm password: ")
+        if password == password_confirm:
+            return password
+        else:
+            print("Passwords do not match. Please try again.")
+            return self.confirm_password(prompt)
+
     def select_database(self):
         duo_files = [f for f in os.listdir() if f.endswith(".duo")]
         if duo_files:
@@ -106,7 +115,7 @@ class DuoAuthenticator:
             self.config_file = f"{db_name}.duo"
 
     def change_password(self):
-        password = self.get_password("Enter a new password for the database: ")
+        password = self.confirm_password("Enter a new password for the database: ")
         salt, new_key = self.derive_encryption_key(password)
         decrypted_data = self.decrypt_data(self.config["encrypted_data"], self.encryption_key)
         self.config["encrypted_data"] = self.encrypt_data(decrypted_data, new_key)
@@ -141,7 +150,7 @@ class DuoAuthenticator:
                         attempts += 1
             else:
                 print("Ready for password input.")
-                password = self.get_password("Enter a password to create a new vault: ")
+                password = self.confirm_password("Enter a password to create a new vault: ")
                 salt, self.encryption_key = self.derive_encryption_key(password)
                 self.config = {"keys": {}}
                 self.save_config(salt)
