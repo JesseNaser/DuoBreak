@@ -24,13 +24,13 @@ This tool is perfect for those who want to have a more flexible authentication m
     pip install -r requirements.txt
     ```
 
-2. Run the `duo_authenticator.py` script:
+2. Run the `duobreak.py` script:
 
     ```
     python duobreak.py
     ```
 
-3. Follow the on-screen instructions to create a new password-protected vault for storing your authentication keys. (Notice your password is hidden from being displayed in the console).
+3. Follow the on-screen instructions to create a new password-protected vault for storing your authentication keys. (Notice your password is hidden from being displayed in the console while typing).
 
 4. On your computer, go to the Duo webpage and add a new device. Choose "Tablet" and then "Android" as your device type, and click "I have Duo Mobile installed".
 
