@@ -8,20 +8,20 @@ from Crypto.Util.Padding import pad, unpad
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from getpass import getpass
 from PIL import Image
 from pyzbar.pyzbar import decode as pyzbar_decode
 import atexit
 import base64
 import datetime
 import email.utils
+import getpass
 import json
 import logging
 import os
 import pyotp
 import requests
+import shutil
 import sys
-import time
 import urllib.parse
 
 logging.basicConfig(level=logging.INFO)
@@ -29,10 +29,12 @@ logger = logging.getLogger(__name__)
 
 
 class DuoAuthenticator:
-    def __init__(self, config_file="config.json"):
+    def __init__(self, config_file=None):
         self.config_file = config_file
+        self.config_version = 1
         self.config = {}
         self.encryption_key = None
+        self.select_database()
         self.load_config()
 
         if "keys" not in self.config:
@@ -75,11 +77,33 @@ class DuoAuthenticator:
         return unpad(cipher.decrypt(encrypted_data[AES.block_size:]), AES.block_size)
 
     def get_password(self, prompt):
-        password = getpass(prompt)
+        password = getpass.getpass(prompt)
         if len(password) < 8:
             logger.error("Password must be at least 8 characters long.")
             return self.get_password(prompt)
         return password
+
+    def select_database(self):
+        duo_files = [f for f in os.listdir() if f.endswith(".duo")]
+        if duo_files:
+            print("Duo databases found:")
+            for i, file in enumerate(duo_files, 1):
+                print(f"{i}. {file}")
+            choice = int(input("Enter the number corresponding to the database you want to use: "))
+            self.config_file = duo_files[choice - 1]
+        else:
+            print("No Duo databases found. Creating a new database.")
+            db_name = input("Enter a name for the new database: ").strip()
+            self.config_file = f"{db_name}.duo"
+
+    def change_password(self):
+        password = self.get_password("Enter a new password for the database: ")
+        salt, new_key = self.derive_encryption_key(password)
+        decrypted_data = self.decrypt_data(self.config["encrypted_data"], self.encryption_key)
+        self.config["encrypted_data"] = self.encrypt_data(decrypted_data, new_key)
+        self.encryption_key = new_key
+        self.save_config(salt=salt)  # Make sure that the salt is passed as a keyword argument
+        print("Password changed successfully.")
 
     def load_config(self):
         attempts = 0
@@ -88,12 +112,21 @@ class DuoAuthenticator:
                 print("Ready for password input.")
                 password = self.get_password("Enter the password to unlock your vault: ")
                 with open(self.config_file, "rb") as f:
-                    salt, encrypted_data = f.read(16), f.read()
+                    version, salt, encrypted_data = f.read(4), f.read(16), f.read()
+                    if version != b'DBv1':
+                        logger.error("Unsupported configuration file version. Exiting...")
+                        sys.exit(1)
+
                     self.encryption_key = self.derive_encryption_key(password, salt)[1]
                     if self.verify_encryption_key(self.encryption_key, password, salt):
-                        decrypted_data = self.decrypt_data(encrypted_data, self.encryption_key)
-                        self.config = json.loads(decrypted_data)
-                        break
+                        try:
+                            self.config["encrypted_data"] = encrypted_data
+                            decrypted_data = self.decrypt_data(encrypted_data, self.encryption_key)
+                            self.config.update(json.loads(decrypted_data))
+                            break
+                        except ValueError as e:
+                            logger.error("Incorrect password or corrupted data. Please try again.")
+                            attempts += 1
                     else:
                         logger.error("Incorrect password. Please try again.")
                         attempts += 1
@@ -107,20 +140,34 @@ class DuoAuthenticator:
             logger.error("Reached maximum password attempts. Exiting...")
             sys.exit(1)
 
-    def save_config(self, salt=None):
-        if salt is None:
-            with open(self.config_file, "rb") as f:
-                salt = f.read(16)
-        with open(self.config_file, "wb") as f:
-            encrypted_data = self.encrypt_data(json.dumps(self.config).encode("utf-8"), self.encryption_key)
-            f.write(salt + encrypted_data)
-
     def import_key(self, keyfile):
         try:
             self.pubkey = RSA.import_key(keyfile.encode('utf-8'))
         except ValueError:
             with open(keyfile, "rb") as f:
                 self.pubkey = RSA.import_key(f.read())
+
+    def save_config(self, salt=None):
+        if salt is None:
+            with open(self.config_file, "rb") as f:
+                version, salt = f.read(4), f.read(16)
+
+        # Temporarily remove the 'encrypted_data' key from the config dictionary, if it exists
+        encrypted_data = self.config.pop("encrypted_data", None)
+
+        # Save the config dictionary without the 'encrypted_data' key to a temporary file
+        temp_file = self.config_file + ".tmp"
+        with open(temp_file, "wb") as f:
+            data_to_save = json.dumps(self.config).encode("utf-8")
+            encrypted_data_to_save = self.encrypt_data(data_to_save, self.encryption_key)
+            f.write(b'DBv1' + salt + encrypted_data_to_save)
+
+        # Replace the original Duo file with the temporary file
+        shutil.move(temp_file, self.config_file)
+
+        # Restore the 'encrypted_data' key to the config dictionary, if it was removed
+        if encrypted_data is not None:
+            self.config["encrypted_data"] = encrypted_data
 
     def prompt_qr_code(self):
         print("Please provide the QR code image file path (leave empty to cancel):")
@@ -202,8 +249,7 @@ class DuoAuthenticator:
                 "hsm_status": "true", "pkpush": "rsa-sha512"}
 
         signature = self.generate_signature("POST", path, time, data, key_config)
-        r = requests.post(f"https://{key_config['host']}{path}", data=data, headers={
-            "Authorization": signature, "x-duo-date": time, "host": key_config['host'], "txId": transaction_id})
+        r = requests.post(f"https://{key_config['host']}{path}", data=data, headers={"Authorization": signature, "x-duo-date": time, "host": key_config['host'], "txId": transaction_id})
 
         return r.json()
 
@@ -304,60 +350,76 @@ class DuoAuthenticator:
             print("2. Delete a key")
             print("3. List keys")
             print("4. Authenticate")
-            print("5. Exit")
+            print("5. Change password")
+            print("6. Exit")
 
-            choice = input("Enter the number (1, 2, 3, 4, or 5) corresponding to the action you want to perform: ")
+            choice = input("Enter the number (1, 2, 3, 4, 5, or 6) corresponding to the action you want to perform: ")
 
             if choice == "1":
-                while True:
-                    key_name = input("Enter a nickname for the new key (leave empty to cancel): ").strip()
-                    if not key_name:
-                        print("Returning to the main menu.")
-                        break
-                    if key_name not in self.config["keys"]:
-                        qr_file_path = self.prompt_qr_code()
-                        if qr_file_path is not None:
-                            parsed_data = self.parse_qr_code(qr_file_path)
-                            if parsed_data is not None:
-                                code, host = parsed_data
-                                response, pubkey, privkey = self.activate(code, host)
-                                self.config["keys"][key_name] = {"code": code, "host": host, "response": response, "pubkey": pubkey, "privkey": privkey}
-                                self.save_config()
-                                print(f"Key '{key_name}' added successfully.")
-                            else:
-                                print("Could not add the key. Returning to the main menu.")
-                        else:
-                            print("No QR code file provided. Returning to the main menu.")
-                        break
-                    else:
-                        print("Error: Key with the same name already exists. Please try again.")
+                self.add_key()
             elif choice == "2":
-                key_name = input("Enter the nickname of the key you want to delete: ")
-                if key_name in self.config["keys"]:
-                    del self.config["keys"][key_name]
-                    self.save_config()
-                    print(f"Key '{key_name}' deleted successfully.")
-                else:
-                    print("Error: Key not found. Please try again.")
+                self.delete_key()
             elif choice == "3":
-                print("Keys:")
-                for key_name in self.config["keys"]:
-                    print(f"- {key_name} ({self.config['keys'][key_name]['response']['customer_name']})")
+                self.list_keys()
             elif choice == "4":
-                key_name = input("Enter the nickname of the key you want to use for authentication: ")
-                if key_name in self.config["keys"]:
-                    self.authenticate(key_name)
-                else:
-                    print("Error: Key not found. Please try again.")
+                self.authenticate_key()
             elif choice == "5":
+                self.change_password()
+            elif choice == "6":
                 print("Exiting...")
                 self.save_config()
                 sys.exit(0)
             else:
                 print("Invalid input. Please try again.")
 
+    def add_key(self):
+        while True:
+            key_name = input("Enter a nickname for the new key (leave empty to cancel): ").strip()
+            if not key_name:
+                print("Returning to the main menu.")
+                break
+            if key_name not in self.config["keys"]:
+                qr_file_path = self.prompt_qr_code()
+                if qr_file_path is not None:
+                    parsed_data = self.parse_qr_code(qr_file_path)
+                    if parsed_data is not None:
+                        code, host = parsed_data
+                        response, pubkey, privkey = self.activate(code, host)
+                        self.config["keys"][key_name] = {"code": code, "host": host, "response": response, "pubkey": pubkey, "privkey": privkey}
+                        self.save_config()
+                        print(f"Key '{key_name}' added successfully.")
+                    else:
+                        print("Could not add the key. Returning to the main menu.")
+                else:
+                    print("No QR code file provided. Returning to the main menu.")
+                break
+            else:
+                print("Error: Key with the same name already exists. Please try again.")
+
+    def delete_key(self):
+        key_name = input("Enter the nickname of the key you want to delete: ")
+        if key_name in self.config["keys"]:
+            del self.config["keys"][key_name]
+            self.save_config()
+            print(f"Key '{key_name}' deleted successfully.")
+        else:
+            print("Error: Key not found. Please try again.")
+
+    def list_keys(self):
+        print("Keys:")
+        for key_name in self.config["keys"]:
+            print(f"- {key_name} ({self.config['keys'][key_name]['response']['customer_name']})")
+
+    def authenticate_key(self):
+        key_name = input("Enter the nickname of the key you want to use for authentication: ")
+        if key_name in self.config["keys"]:
+            self.authenticate(key_name)
+        else:
+            print("Error: Key not found. Please try again.")
+
     def delete_encryption_key_from_memory(self):
         self.encryption_key = None
+
 
 if __name__ == "__main__":
     authenticator = DuoAuthenticator()
