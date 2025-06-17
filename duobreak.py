@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Version: 1.0.0
+# Version: 1.1.0
 # For security updates, visit github.com/JesseNaser/DuoBreak
 
 from Crypto.Cipher import AES
