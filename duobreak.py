@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Version: 1.0.0
 # For security updates, visit github.com/JesseNaser/DuoBreak
@@ -30,6 +31,8 @@ import urllib.parse
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+VERIFY_SSL = True
+
 
 class DuoAuthenticator:
     def __init__(self, config_file=None):
@@ -54,7 +57,7 @@ class DuoAuthenticator:
             iterations=100000,
             backend=default_backend()
         )
-        return salt, kdf.derive(password.encode('utf-8'))
+        return salt, kdf.derive(password.encode("utf-8"))
 
     def verify_encryption_key(self, key, password, salt):
         kdf = PBKDF2HMAC(
@@ -65,7 +68,7 @@ class DuoAuthenticator:
             backend=default_backend()
         )
         try:
-            kdf.verify(password.encode('utf-8'), key)
+            kdf.verify(password.encode("utf-8"), key)
             return True
         except Exception:
             return False
@@ -133,7 +136,7 @@ class DuoAuthenticator:
                 password = self.get_password("Enter the password to unlock your vault: ")
                 with open(self.config_file, "rb") as f:
                     version, salt, encrypted_data = f.read(4), f.read(16), f.read()
-                    if version != b'DBv1':
+                    if version != b"DBv1":
                         logger.error("Unsupported configuration file version. Exiting...")
                         sys.exit(1)
 
@@ -162,7 +165,7 @@ class DuoAuthenticator:
 
     def import_key(self, keyfile):
         try:
-            self.pubkey = RSA.import_key(keyfile.encode('utf-8'))
+            self.pubkey = RSA.import_key(keyfile.encode("utf-8"))
         except ValueError:
             with open(keyfile, "rb") as f:
                 self.pubkey = RSA.import_key(f.read())
@@ -172,25 +175,34 @@ class DuoAuthenticator:
             with open(self.config_file, "rb") as f:
                 version, salt = f.read(4), f.read(16)
 
-        # Temporarily remove the 'encrypted_data' key from the config dictionary, if it exists
+        # Temporarily remove the "encrypted_data" key from the config dictionary, if it exists
         encrypted_data = self.config.pop("encrypted_data", None)
 
-        # Save the config dictionary without the 'encrypted_data' key to a temporary file
+        # Save the config dictionary without the "encrypted_data" key to a temporary file
         temp_file = self.config_file + ".tmp"
         with open(temp_file, "wb") as f:
             data_to_save = json.dumps(self.config).encode("utf-8")
             encrypted_data_to_save = self.encrypt_data(data_to_save, self.encryption_key)
-            f.write(b'DBv1' + salt + encrypted_data_to_save)
+            f.write(b"DBv1" + salt + encrypted_data_to_save)
 
         # Replace the original Duo file with the temporary file
         shutil.move(temp_file, self.config_file)
 
-        # Restore the 'encrypted_data' key to the config dictionary, if it was removed
+        # Restore the "encrypted_data" key to the config dictionary, if it was removed
         if encrypted_data is not None:
             self.config["encrypted_data"] = encrypted_data
 
+    @staticmethod
+    def prompt_activation_code_and_host_name():
+        code = input("Please provide the activation code (leave empty to cancel): ").strip()
+        host = input('Please provide the host name (e.g. "api-e0724a16.duosecurity.com", leave empty to cancel): ').strip()
+        if not code or not host:
+            return None, None
+        else:
+            return code, host
+
     def prompt_qr_code(self):
-        print("Please provide the QR code image file path (leave empty to cancel):")
+        print("Please provide the QR code image file path (leave empty to cancel): ")
         file_path = input().strip()
         if not file_path:
             return None
@@ -216,19 +228,43 @@ class DuoAuthenticator:
             return None
 
     def activate(self, code, host):
-        url = f"https://{host}/push/v2/activation/{code}?customer_protocol=1"
+        url = f"https://{host}/push/v2/activation/{code}"
+
         headers = {
-            "User-Agent": "okhttp/2.7.5"
-        }
-        key_pair = RSA.generate(2048)
-        pubkey_data = key_pair.publickey().export_key("PEM").decode('ascii')
-        privkey_data = key_pair.export_key("PEM").decode('ascii')
-        data = {
-            "pubkey": pubkey_data,
-            "pkpush": "rsa-sha512"
+            "User-Agent": "DuoMobileApp/4.73.0.873.1 (arm64; iOS 18.1); Client: Foundation",
+            "Accept": "*/*",
+            "Accept-Language": "en-us",
+            "Accept-Encoding": "gzip, deflate, br"
+            # "Content-Type": "application/x-www-form-urlencoded",
         }
 
-        r = requests.post(url, headers=headers, data=data)
+        key_pair = RSA.generate(2048)
+        pubkey_data = key_pair.publickey().export_key("PEM").decode("ascii")
+        privkey_data = key_pair.export_key("PEM").decode("ascii")
+
+        data = {
+            "app_id": "com.duosecurity.DuoMobile",
+            "app_version": "4.73.0.873.1",
+            "ble_status": "allowed",  # NOTE: can also be "undetermined"
+            "build_version": "24B5055e",
+            "customer_protocol": "1",
+            "device_name": "iPad",
+            "jailbroken": "false",
+            "language": "en",
+            "manufacturer": "Apple",
+            "model": "arm64",
+            "notification_status": "not_determined",
+            "passcode_status": "true",
+            "pkpush": "rsa-sha512",
+            "platform": "iOS",
+            "pubkey": pubkey_data,
+            "region": "US",
+            "security_patch_level": "",
+            "touchid_status": "true",
+            "version": "18.1"
+        }
+
+        r = requests.post(url, headers=headers, data=data, verify=VERIFY_SSL)
         response = r.json()
 
         if "response" in response:
@@ -240,24 +276,35 @@ class DuoAuthenticator:
 
     def generate_signature(self, method, path, time, data, key_config):
         message = (time + "\n" + method + "\n" + key_config["host"].lower() + "\n" +
-                   path + '\n' + urllib.parse.urlencode(data)).encode('ascii')
+                   path + "\n" + urllib.parse.urlencode(data)).encode("ascii")
 
         h = SHA512.new(message)
         signature = pkcs1_15.new(self.pubkey).sign(h)
         auth = ("Basic " + base64.b64encode((key_config["response"]["pkey"] + ":" +
-                                             base64.b64encode(signature).decode('ascii')).encode('ascii')).decode('ascii'))
+                                             base64.b64encode(signature).decode("ascii")).encode("ascii")).decode("ascii"))
         return auth
 
     def get_transactions(self, key_config):
         dt = datetime.datetime.utcnow()
         time = email.utils.format_datetime(dt)
         path = "/push/v2/device/transactions"
-        data = {"akey": key_config["response"]["akey"], "fips_status": "1",
-                "hsm_status": "true", "pkpush": "rsa-sha512"}
+
+        data = {
+            "akey": key_config["response"]["akey"],
+            "fips_status": "1",
+            "hsm_status": "true",
+            "pkpush": "rsa-sha512"
+        }
 
         signature = self.generate_signature("GET", path, time, data, key_config)
-        r = requests.get(f"https://{key_config['host']}{path}", params=data, headers={
-            "Authorization": signature, "x-duo-date": time, "host": key_config['host']})
+
+        headers = {
+            "Authorization": signature,
+            "x-duo-date": time,
+            "host": key_config["host"]
+        }
+
+        r = requests.get(f"https://{key_config['host']}{path}", params=data, headers=headers, verify=VERIFY_SSL)
 
         return r.json()
 
@@ -265,11 +312,25 @@ class DuoAuthenticator:
         dt = datetime.datetime.utcnow()
         time = email.utils.format_datetime(dt)
         path = "/push/v2/device/transactions/" + transaction_id
-        data = {"akey": key_config["response"]["akey"], "answer": answer, "fips_status": "1",
-                "hsm_status": "true", "pkpush": "rsa-sha512"}
+
+        data = {
+            "akey": key_config["response"]["akey"],
+            "answer": answer,
+            "fips_status": "1",
+            "hsm_status": "true",
+            "pkpush": "rsa-sha512"
+        }
 
         signature = self.generate_signature("POST", path, time, data, key_config)
-        r = requests.post(f"https://{key_config['host']}{path}", data=data, headers={"Authorization": signature, "x-duo-date": time, "host": key_config['host'], "txId": transaction_id})
+
+        headers = {
+            "Authorization": signature,
+            "x-duo-date": time,
+            "host": key_config["host"],
+            "txId": transaction_id
+        }
+
+        r = requests.post(f"https://{key_config['host']}{path}", data=data, headers=headers, verify=VERIFY_SSL)
 
         return r.json()
 
@@ -299,7 +360,7 @@ class DuoAuthenticator:
                     if transactions:
                         for tx in transactions:
                             print(tx)
-                            reply = self.reply_transaction(tx["urgid"], 'approve', key_config)
+                            reply = self.reply_transaction(tx["urgid"], "approve", key_config)
                             approved = True
                             break
                         if approved:
@@ -366,53 +427,69 @@ class DuoAuthenticator:
     def main_menu(self):
         while True:
             print("\nMain Menu:")
-            print("1. Add a new key")
-            print("2. Delete a key")
-            print("3. List keys")
-            print("4. Authenticate")
-            print("5. Change password")
-            print("6. Exit")
+            print("1. Add a new key using a QR Code")
+            print("2. Add a new key using an activation code and host")
+            print("3. Delete a key")
+            print("4. List keys")
+            print("5. Authenticate")
+            print("6. Change password")
+            print("7. Exit")
 
-            choice = input("Enter the number (1, 2, 3, 4, 5, or 6) corresponding to the action you want to perform: ")
+            choice = input("Enter the number (1, 2, 3, 4, 5, 6 or 7) corresponding to the action you want to perform: ")
 
             if choice == "1":
-                self.add_key()
-            elif choice == "2":
-                self.delete_key()
+                self.add_key("qr_code")
+            if choice == "2":
+                self.add_key("activation_code_and_host_name")
             elif choice == "3":
-                self.list_keys()
+                self.delete_key()
             elif choice == "4":
-                self.authenticate_key()
+                self.list_keys()
             elif choice == "5":
-                self.change_password()
+                self.authenticate_key()
             elif choice == "6":
+                self.change_password()
+            elif choice == "7":
                 print("Exiting...")
                 self.save_config()
                 sys.exit(0)
             else:
                 print("Invalid input. Please try again.")
 
-    def add_key(self):
+    def add_key(self, mode):
         while True:
             key_name = input("Enter a nickname for the new key (leave empty to cancel): ").strip()
             if not key_name:
                 print("Returning to the main menu.")
                 break
             if key_name not in self.config["keys"]:
-                qr_file_path = self.prompt_qr_code()
-                if qr_file_path is not None:
-                    parsed_data = self.parse_qr_code(qr_file_path)
-                    if parsed_data is not None:
-                        code, host = parsed_data
+                if mode == "activation_code_and_host_name":
+                    code, host = self.prompt_activation_code_and_host_name()
+                    if code is not None and host is not None:
                         response, pubkey, privkey = self.activate(code, host)
                         self.config["keys"][key_name] = {"code": code, "host": host, "response": response, "pubkey": pubkey, "privkey": privkey}
                         self.save_config()
                         print(f"Key '{key_name}' added successfully.")
                     else:
-                        print("Could not add the key. Returning to the main menu.")
+                        print("No activation code or host name provided. Returning to the main menu.")
+                    break
+                elif mode == "qr_code":
+                    qr_file_path = self.prompt_qr_code()
+                    if qr_file_path is not None:
+                        parsed_data = self.parse_qr_code(qr_file_path)
+                        if parsed_data is not None:
+                            code, host = parsed_data
+                            response, pubkey, privkey = self.activate(code, host)
+                            self.config["keys"][key_name] = {"code": code, "host": host, "response": response, "pubkey": pubkey, "privkey": privkey}
+                            self.save_config()
+                            print(f"Key '{key_name}' added successfully.")
+                        else:
+                            print("Could not add the key. Returning to the main menu.")
+                    else:
+                        print("No QR code file provided. Returning to the main menu.")
+                    break
                 else:
-                    print("No QR code file provided. Returning to the main menu.")
-                break
+                    raise ValueError(f"Invalid mode {mode}")
             else:
                 print("Error: Key with the same name already exists. Please try again.")
 

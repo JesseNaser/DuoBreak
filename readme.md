@@ -10,6 +10,7 @@ DuoBreak is a Python-based solution for handling Duo Push and HOTP authenticatio
 
 ### Initial Key Setup
 
+
 1. Clone this repository and install the required Python packages:
 
     ```
@@ -18,25 +19,32 @@ DuoBreak is a Python-based solution for handling Duo Push and HOTP authenticatio
     pip install -r requirements.txt
     ```
 
-2. Run the `duobreak.py` script:
+2. (for macOS only!) Install dependencies:
+
+    ```
+    brew install zbar
+    sudo ln -s $(brew --prefix zbar)/lib/libzbar.dylib /usr/local/lib/libzbar.dylib
+    ```
+
+3. Run the `duobreak.py` script:
 
     ```
     python duobreak.py
     ```
 
-3. Follow the on-screen instructions to create a new password-protected vault for storing your authentication keys. *Notice your password is hidden from being displayed in the console while typing*.
+4. Follow the on-screen instructions to create a new password-protected vault for storing your authentication keys. *Notice your password is hidden from being displayed in the console while typing*.
 
-4. On your computer, go to the Duo webpage and add a new device. Choose "Tablet" and then "Android" as your device type, and click "I have Duo Mobile installed".
+5. On your computer, go to the Duo webpage and add a new device. Choose "Tablet" and then "Android" as your device type, and click "I have Duo Mobile installed".
 
-5. Save the QR code image given by the webpage as a PNG file.
+6. Save the QR code image given by the webpage as a PNG file.
 
-6. In the DuoBreak script, choose "Add a new key" from the main menu. Enter a nickname for the new key and provide the file path to the saved QR code image.
+7. In the DuoBreak script, choose "Add a new key" from the main menu. Enter a nickname for the new key and provide the file path to the saved QR code image.
 
-7. The script will automatically activate the new key and store it securely in your vault.
+8. The script will automatically activate the new key and store it securely in your vault.
 
 ### Authentication
 
-8. To authenticate, choose "Authenticate" from the main menu and enter the nickname of the key you want to use. You can choose to authenticate using Duo push notifications or HOTP codes.
+To authenticate, choose "Authenticate" from the main menu and enter the nickname of the key you want to use. You can choose to authenticate using Duo push notifications or HOTP codes.
 
 ## License
 
